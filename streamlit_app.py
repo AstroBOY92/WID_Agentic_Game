@@ -8,9 +8,14 @@ from tools.exporters import itinerary_to_markdown, itinerary_to_ics
 
 load_dotenv()
 
-APP_NAME = os.getenv ("APP_NAME", "Big Ear")
+APP_NAME = os.getenv("APP_NAME", "Big Ears")
 st.set_page_config(page_title=APP_NAME, layout="wide")
-st.title("🡂😄 👂" + APP_NAME + " — The AI That Listens and Plans Your Trip")
+
+# Custom HTML for style (slightly smaller, sun icon)
+st.markdown(
+    f"<h1 style='font-size: 28px;'>👂☀️ {APP_NAME} — The AI That Listens and Plans Your Trip</h1>",
+    unsafe_allow_html=True
+)
 
 with st.sidebar:
     origin = st.text_input("Origin", os.getenv("DEFAULT_ORIGIN", "London"))
