@@ -1,118 +1,251 @@
-import os, json, requests, pandas as pd
+# ============================================================
+# 🧭 Big Ears – Streamlit App
+# An open-source AI travel planner using a local LLM (Ollama)
+# ============================================================
+
 import streamlit as st
+import pandas as pd
 from datetime import date
-from dotenv import load_dotenv
-from agent.graph import TripState, run_agent_once
-from tools.maps import bbox_from_points, osm_deeplink
+from agent.graph import run_agent_once, refine_plan, TripState
 from tools.exporters import itinerary_to_markdown, itinerary_to_ics
+import pydeck as pdk
 
-load_dotenv()
 
-APP_NAME = os.getenv("APP_NAME", "Big Ears")
-st.set_page_config(page_title=APP_NAME, layout="wide")
+# ============================================================
+# ⚙️ 1. APP CONFIGURATION
+# ============================================================
 
-# Custom HTML for style (slightly smaller, sun icon)
-st.markdown(
-    f"<h1 style='font-size: 28px;'>👂☀️ {APP_NAME} — The AI That Listens and Plans Your Trip</h1>",
-    unsafe_allow_html=True
-)
+# Page setup
+st.set_page_config(page_title="Big Ears", layout="wide")
 
-with st.sidebar:
-    origin = st.text_input("Origin", os.getenv("DEFAULT_ORIGIN", "London"))
-    dest = st.text_input("Destination (optional)", "")
-    start = st.date_input("Start date", date.today())
-    end = st.date_input("End date", date.today())
-    budget = st.selectbox("Budget", ["Low", "Medium", "High"], index=1)
-    vibe = st.multiselect("Vibe", ["Food", "Museums", "Outdoors", "Nightlife", "Hidden gems"],
-                          default=["Food","Outdoors"])
-    if st.button("Generate / Refine Plan"):
-        st.session_state['go'] = True
-
+# Initialize session state (to persist across reruns)
 if 'state' not in st.session_state:
-    st.session_state['state'] = TripState()
+    st.session_state['state'] = TripState()  # internal logic / conversation history
+if 'plan' not in st.session_state:
+    st.session_state['plan'] = None          # last generated plan
+if 'page' not in st.session_state:
+    st.session_state['page'] = "input"       # app view: "input" or "output"
 
-# show chat-like history (concise)
-if st.session_state['state'].messages:
-    with st.expander("Conversation (debug)", expanded=False):
-        for m in st.session_state['state'].messages[-8:]:
-            st.markdown(f"**{m['role']}**: {m['content'][:500]}")
 
-user_msg = st.chat_input("Tell me about your trip preferences (optional)...")
-if user_msg:
-    st.session_state['state'].messages.append({"role":"user","content":user_msg})
+# ============================================================
+# ✈️ 2. PAGE 1 — TRIP PLANNER (USER INPUT)
+# ============================================================
 
-colL, colR = st.columns([0.55, 0.45])
+if st.session_state['page'] == "input":
+    st.markdown("## 👂☀️ Welcome to Big Ears")
+    st.write("Tell me about your next adventure — and I’ll craft your itinerary!")
 
-with colL:
-    st.subheader("Planner")
-    if st.session_state.get('go'):
-        st.session_state['go'] = False
-        # build input
+    # --- User input fields ---
+    origin = st.text_input("Origin", "London")
+    destination = st.text_input("Destination (optional)", "")
+    start_date = st.date_input("Start Date", date.today())
+    days = st.number_input("Number of Days", min_value=1, value=5)
+    budget = st.number_input("Budget (£)", min_value=0, value=800, step=50)
+    vibe = st.multiselect(
+        "Vibe",
+        ["Relaxing", "Adventure", "Cultural", "Party", "Romantic"],
+        default=["Cultural"]
+    )
+    trip_description = st.text_area(
+        "Describe your ideal trip",
+        placeholder="e.g., A cultural week with food and a bit of nightlife."
+    )
+
+    # --- Generate button ---
+    if st.button("🎯 Generate Plan"):
+        # Store all user input into intent (used by LLM agent)
         intent = {
-            "origin": origin, "dest": dest, "start": str(start), "end": str(end),
-            "budget": budget, "vibe": vibe,
+            "origin": origin,
+            "dest": destination,
+            "start": str(start_date),
+            "end": str(start_date),
+            "days": days,
+            "budget": budget,
+            "vibe": vibe,
+            "description": trip_description
         }
         st.session_state['state'].intent = intent
-        with st.spinner("Assembling itinerary..."):
+
+        # Run the agent once to generate itinerary
+        with st.spinner("🧠 Assembling your itinerary..."):
             st.session_state['state'] = run_agent_once(st.session_state['state'])
+            st.session_state['plan'] = st.session_state['state'].plan
 
-    plan = st.session_state['state'].plan
-    if plan:
-        st.success(f"Destination: {plan['destination'].get('city','?')}, {plan['destination'].get('country','')}")
-        # show table of items
-        rows = []
-        for day in plan["daily_plan"]:
-            for it in day["items"]:
-                rows.append({
-                    "date": day["date"],
-                    "time": it.get("time"),
-                    "name": it.get("name"),
-                    "type": it.get("type"),
-                    "notes": it.get("notes",""),
-                    "lat": it.get("lat"),
-                    "lon": it.get("lon"),
-                    "duration_min": it.get("duration_min"),
+        # Move to next page (itinerary view)
+        st.session_state['page'] = "output"
+        st.rerun()
+
+
+# ============================================================
+# 🗺️ 3. PAGE 2 — ITINERARY & MAP (OUTPUT VIEW)
+# ============================================================
+
+elif st.session_state['page'] == "output":
+    plan = st.session_state['plan']
+
+    # --- Safety check ---
+    if not plan:
+        st.warning("No plan found. Please go back and generate one.")
+        if st.button("⬅️ Back to Planner"):
+            st.session_state['page'] = "input"
+            st.rerun()
+        st.stop()
+
+    # --- Header ---
+    st.markdown(f"## 🗺️ Your Trip to {plan['destination'].get('city','Unknown')}")
+    st.caption("Here’s your personalized day-by-day itinerary — planned by Big Ears!")
+
+    # --- Display itinerary as table ---
+    rows = []
+    for day in plan["daily_plan"]:
+        for it in day["items"]:
+            rows.append({
+                "date": day["date"],
+                "time": it.get("time"),
+                "name": it.get("name"),
+                "type": it.get("type"),
+                "notes": it.get("notes", ""),
+                "lat": it.get("lat"),
+                "lon": it.get("lon"),
+                "duration_min": it.get("duration_min"),
+            })
+
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    # ========================================================
+    # 📥 EXPORT OPTIONS
+    # ========================================================
+    st.markdown("### 💾 Download Your Itinerary")
+
+    colA, colB = st.columns(2)
+    with colA:
+        md = itinerary_to_markdown(plan)
+        st.download_button(
+            "⬇️ Download Markdown",
+            data=md,
+            file_name="itinerary.md",
+            mime="text/markdown"
+        )
+    with colB:
+        ics = itinerary_to_ics(plan)
+        st.download_button(
+            "⬇️ Download Calendar (ICS)",
+            data=ics,
+            file_name="itinerary.ics",
+            mime="text/calendar"
+        )
+
+    # ========================================================
+    # ✏️ PLAN REFINEMENT (LLM)
+    # ========================================================
+    st.markdown("### ✏️ Refine Your Plan")
+
+    refine_text = st.text_area(
+        "Tell Big Ears how to adjust your trip",
+        placeholder="e.g., Make it cheaper and add more hiking..."
+    )
+
+    if st.button("🪄 Refine Plan"):
+        if refine_text.strip():
+            with st.spinner("Refining your itinerary..."):
+                st.session_state['state'] = refine_plan(st.session_state['state'], refine_text)
+                st.session_state['plan'] = st.session_state['state'].plan
+            st.success("✅ Plan refined! Scroll up to view the updated itinerary.")
+            st.rerun()
+        else:
+            st.warning("Please enter a refinement request before pressing the button.")
+
+    # ========================================================
+    # ⬅️ BACK BUTTON
+    # ========================================================
+    st.markdown("---")
+    if st.button("⬅️ Back to Planner"):
+        st.session_state['page'] = "input"
+        st.rerun()
+# ========================================================
+# 🗺️ MAP VISUALIZATION (ENHANCED)
+# ========================================================
+st.markdown("### 🌍 Map Overview")
+
+try:
+    # Collect all itinerary points in order
+    pts = []
+    for day in plan["daily_plan"]:
+        for it in day["items"]:
+            if it.get("lat") and it.get("lon"):
+                pts.append({
+                    "lat": it["lat"],
+                    "lon": it["lon"],
+                    "name": it.get("name", "Unknown"),
+                    "day": day["date"],
+                    "type": it.get("type", "activity"),
                 })
-        if rows:
-            df = pd.DataFrame(rows)
-            st.dataframe(df)
 
-        # Exports
-        colA, colB, colC = st.columns(3)
-        with colA:
-            if st.button("⬇️ Download Markdown"):
-                md = itinerary_to_markdown(plan)
-                st.download_button("Save itinerary.md", data=md, file_name="itinerary.md", mime="text/markdown")
-        with colB:
-            if st.button("⬇️ Download ICS"):
-                ics = itinerary_to_ics(plan)
-                st.download_button("Save itinerary.ics", data=ics, file_name="itinerary.ics", mime="text/calendar")
+    if pts:
+        # --- 1️⃣ Scatterplot layer for activity points ---
+        scatter = pdk.Layer(
+            "ScatterplotLayer",
+            data=pts,
+            get_position='[lon, lat]',
+            get_fill_color='[255, 140, 0, 160]',  # warm orange with transparency
+            get_radius=80,
+            pickable=True
+        )
 
-with colR:
-    st.subheader("Map & Links")
-    plan = st.session_state['state'].plan
-    if plan:
-        pts = [(it.get("lat"), it.get("lon")) for d in plan["daily_plan"] for it in d["items"] if it.get("lat") and it.get("lon")]
-        if pts:
-            try:
-                import pydeck as pdk
-                layer = pdk.Layer("ScatterplotLayer",
-                                  [{"position":[lon,lat]} for lat,lon in pts],
-                                  get_position="position", get_radius=70, pickable=False)
-                view_state = pdk.ViewState(latitude=sum([p[0] for p in pts])/len(pts),
-                                           longitude=sum([p[1] for p in pts])/len(pts),
-                                           zoom=11)
-                st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state))
-            except Exception as e:
-                st.info("Map preview unavailable, but deeplinks below.")
-        osm_links = []
-        for d in plan["daily_plan"]:
-            for it in d["items"]:
-                if it.get("lat") and it.get("lon"):
-                    osm_links.append((it["name"], osm_deeplink(it["lat"], it["lon"])))
-        if osm_links:
-            st.markdown("**OSM Links**")
-            for name, url in osm_links[:50]:
-                st.markdown(f"- [{name}]({url})")
+        # --- 2️⃣ Line layer to connect points in order ---
+        lines = []
+        for i in range(len(pts) - 1):
+            lines.append({
+                "from": [pts[i]["lon"], pts[i]["lat"]],
+                "to": [pts[i + 1]["lon"], pts[i + 1]["lat"]]
+            })
 
-st.caption("Tip: add an OpenTripMap API key in your .env for richer POIs.")
+        line_layer = pdk.Layer(
+            "LineLayer",
+            data=lines,
+            get_source_position="from",
+            get_target_position="to",
+            get_color="[0, 100, 255, 180]",  # blue route line
+            get_width=4
+        )
+
+        # --- 3️⃣ Text labels (optional, day names or activity) ---
+        text_layer = pdk.Layer(
+            "TextLayer",
+            data=pts,
+            get_position='[lon, lat]',
+            get_text='name',
+            get_color='[20, 20, 20, 200]',
+            get_size=12,
+            get_alignment_baseline="'bottom'"
+        )
+
+        # --- 4️⃣ Combine layers ---
+        view_state = pdk.ViewState(
+            latitude=sum(p["lat"] for p in pts) / len(pts),
+            longitude=sum(p["lon"] for p in pts) / len(pts),
+            zoom=11,
+            pitch=35,
+        )
+
+        st.pydeck_chart(pdk.Deck(
+            layers=[scatter, line_layer, text_layer],
+            initial_view_state=view_state,
+            tooltip={"text": "{name}\nType: {type}\nDay: {day}"}
+        ))
+    else:
+        st.info("No coordinates available for map.")
+except Exception as e:
+    st.error(f"Map failed to render: {e}")
+
+import numpy as np
+
+# Color-code each day randomly
+color_map = {}
+for d in set(p["day"] for p in pts):
+    color_map[d] = list(np.random.choice(range(256), size=3)) + [160]
+for p in pts:
+    p["color"] = color_map[p["day"]]
+
+get_fill_color="color",
