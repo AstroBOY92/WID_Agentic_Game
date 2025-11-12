@@ -176,6 +176,11 @@ elif st.session_state['page'] == "output":
     st.markdown("### 🌍 Map Overview")
 
     try:
+        plan = st.session_state.get("plan")
+        if not plan:
+            st.info("No plan available yet — please generate one first.")
+            st.stop()
+
         pts = []
         for day in plan.get("daily_plan", []):
             for it in day.get("items", []):
@@ -189,62 +194,84 @@ elif st.session_state['page'] == "output":
                         "type": it.get("type", "activity")
                     })
 
-        if pts:
-            # Scatterplot layer
-            scatter = pdk.Layer(
-                "ScatterplotLayer",
-                data=pts,
-                get_position='[lon, lat]',
-                get_fill_color='[255, 140, 0, 160]',
-                get_radius=80,
-                pickable=True
-            )
+        # ✅ Fallback if no coordinates
+        if not pts:
+            city = plan.get("destination", {})
+            if city.get("lat") and city.get("lon"):
+                st.warning("⚠️ No detailed coordinates found — showing city center.")
+                pts = [{
+                    "lat": city["lat"],
+                    "lon": city["lon"],
+                    "name": city.get("city", "Unknown city"),
+                    "day": "",
+                    "type": "city"
+                }]
+            else:
+                st.info("No location data available for this plan.")
+                st.stop()
 
-            # Line layer (connect points in order)
-            lines = []
-            for i in range(len(pts) - 1):
-                lines.append({
-                    "from": [pts[i]["lon"], pts[i]["lat"]],
-                    "to": [pts[i + 1]["lon"], pts[i + 1]["lat"]]
-                })
+        # 🔵 Scatterplot
+        scatter = pdk.Layer(
+            "ScatterplotLayer",
+            data=pts,
+            get_position='[lon, lat]',
+            get_fill_color='[255, 140, 0, 160]',
+            get_radius=100,
+            pickable=True
+        )
 
-            line_layer = pdk.Layer(
-                "LineLayer",
-                data=lines,
-                get_source_position="from",
-                get_target_position="to",
-                get_color="[0, 100, 255, 180]",
-                get_width=4
-            )
+        # 🔵 Line connections
+        lines = []
+        for i in range(len(pts) - 1):
+            lines.append({
+                "from": [pts[i]["lon"], pts[i]["lat"]],
+                "to": [pts[i + 1]["lon"], pts[i + 1]["lat"]]
+            })
+        line_layer = pdk.Layer(
+            "LineLayer",
+            data=lines,
+            get_source_position="from",
+            get_target_position="to",
+            get_color="[0, 100, 255, 180]",
+            get_width=4
+        )
 
-            # Text labels
-            text_layer = pdk.Layer(
-                "TextLayer",
-                data=pts,
-                get_position='[lon, lat]',
-                get_text='name',
-                get_color='[30, 30, 30, 200]',
-                get_size=12,
-                get_alignment_baseline="'bottom'"
-            )
+        # 📝 Text labels
+        text_layer = pdk.Layer(
+            "TextLayer",
+            data=pts,
+            get_position='[lon, lat]',
+            get_text='name',
+            get_color='[30, 30, 30, 200]',
+            get_size=12,
+            get_alignment_baseline="'bottom'"
+        )
 
-            view_state = pdk.ViewState(
-                latitude=sum(p["lat"] for p in pts) / len(pts),
-                longitude=sum(p["lon"] for p in pts) / len(pts),
-                zoom=11,
-                pitch=35,
-            )
+        # 🗺️ View settings
+        view_state = pdk.ViewState(
+            latitude=sum(p["lat"] for p in pts) / len(pts),
+            longitude=sum(p["lon"] for p in pts) / len(pts),
+            zoom=10 if len(pts) == 1 else 11,
+            pitch=35,
+        )
 
-            st.pydeck_chart(pdk.Deck(
-                layers=[scatter, line_layer, text_layer],
-                initial_view_state=view_state,
-                tooltip={"text": "{name}\n{day}\nType: {type}"}
-            ))
-        else:
-            st.info("No coordinates available to display on the map.")
+        st.pydeck_chart(pdk.Deck(
+            layers=[scatter, line_layer, text_layer],
+            initial_view_state=view_state,
+            tooltip={"text": "{name}\n{day}\nType: {type}"}
+        ))
 
     except Exception as e:
         st.error(f"Map failed to render: {e}")
+
+    # ========================================================
+    # ⬅️ BACK BUTTON
+    # ========================================================
+    st.markdown("---")
+    if st.button("⬅️ Back to Planner"):
+        st.session_state['page'] = "input"
+        st.rerun()
+
 
     # ========================================================
     # ⬅️ BACK BUTTON

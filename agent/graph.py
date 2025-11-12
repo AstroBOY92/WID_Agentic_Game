@@ -12,7 +12,7 @@ from tools.tools_models_patched import chat_complete
 # ================================================================
 # 🔄 MODE SWITCH: Toggle between real and chaotic Big Ears
 # ================================================================
-CHAOTIC_MODE = False  # ⬅️ Change to False for "Real Big Ears" (normal mode)
+CHAOTIC_MODE = True  # ⬅️ Change to False for "Real Big Ears" (normal mode)
 
 
 # ================================================================
