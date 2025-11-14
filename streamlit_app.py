@@ -5,17 +5,61 @@
 
 import streamlit as st
 import pandas as pd
+import base64
 from datetime import date
 from agent.graph import run_agent_once, refine_plan, TripState
 import pydeck as pdk
+import os
 
 # ============================================================
-# ⚙️ APP CONFIGURATION
+# ⚙️ 1. APP CONFIGURATION
 # ============================================================
 
 st.set_page_config(page_title="Big Ears", layout="wide")
 
-# Session state
+# ============================================================
+# 📌 LOAD LOGO (base64 → guaranteed to work)
+# ============================================================
+
+def add_logo():
+    """Add a top-right logo that works in all deployment environments."""
+    logo_path = os.path.join(os.path.dirname(__file__), "logo.jpg")
+
+    try:
+        with open(logo_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode()
+
+        st.markdown(
+            f"""
+            <img src="data:image/jpeg;base64,{encoded}" 
+                 style="position:absolute; top:15px; right:25px; width:85px; border-radius:50%;" />
+            """,
+            unsafe_allow_html=True
+        )
+    except Exception as e:
+        st.warning(f"Logo not loaded: {e}")
+
+add_logo()
+
+# ============================================================
+# 📘 THEME STYLES (Napoli Azzurro)
+# ============================================================
+
+st.markdown("""
+<style>
+    body, .stApp {
+        background-color: #e1f2fe !important;
+    }
+    .stMarkdown, .stTextInput, .stDateInput, .stTextArea, .stButton {
+        color: #003366 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# 📦 SESSION STATE INIT
+# ============================================================
+
 if "state" not in st.session_state:
     st.session_state["state"] = TripState()
 if "plan" not in st.session_state:
@@ -24,7 +68,7 @@ if "page" not in st.session_state:
     st.session_state["page"] = "input"
 
 # ============================================================
-# ✈️ PAGE 1 — TRIP PLANNER
+# ✈️ PAGE 1 — TRIP PLANNER (USER INPUT)
 # ============================================================
 
 if st.session_state["page"] == "input":
@@ -33,23 +77,28 @@ if st.session_state["page"] == "input":
     st.caption("**The AI Agent that listens to you.**")
     st.write("Tell me about your next adventure — and I’ll craft your itinerary!")
 
-    # Inputs
+    # --- Origin ---
     origin = st.text_input("🌍 Origin", "London")
+
+    # --- Start date ---
     start_date = st.date_input("🗓️ Start Date", date.today())
 
-    # Trip description
+    # --- Chat-style description ---
     st.markdown("#### 💬 Describe your ideal trip (chat style)")
     trip_description = st.text_area(
         "Tell Big Ears everything:",
-        placeholder="e.g., 7-day budget beach trip in Greece with good food…",
+        placeholder=(
+            "e.g., Plan me a 7-day relaxing beach holiday in Greece with a low budget, "
+            "good food, nature and photography."
+        ),
         height=120,
     )
 
-    # Optional destination
+    # --- Optional destination ---
     st.markdown("#### 🌐 Or alternatively, enter your destination")
     destination = st.text_input("📍 Destination (optional)", "")
 
-    # Generate button
+    # --- Generate itinerary ---
     if st.button("🎯 Generate Plan"):
         intent = {
             "origin": origin,
@@ -69,7 +118,7 @@ if st.session_state["page"] == "input":
         st.rerun()
 
 # ============================================================
-# 🗺️ PAGE 2 — ITINERARY + MAP (SIDE-BY-SIDE)
+# 🗺️ PAGE 2 — ITINERARY & MAP (SIDE-BY-SIDE)
 # ============================================================
 
 elif st.session_state["page"] == "output":
@@ -83,25 +132,24 @@ elif st.session_state["page"] == "output":
             st.rerun()
         st.stop()
 
-    # Header
+    # Destination header
     dest_city = plan["destination"].get("city", "Unknown")
     dest_country = plan["destination"].get("country", "")
 
-    title = f"## 🗺️ Your Trip to {dest_city}"
     if dest_country:
-        title += f" / {dest_country}"
-    st.markdown(title)
+        st.markdown(f"## 🗺️ Your Trip to {dest_city} / {dest_country}")
+    else:
+        st.markdown(f"## 🗺️ Your Trip to {dest_city}")
+
     st.caption("Here’s your personalized day-by-day itinerary — powered by Big Ears AI.")
 
     # ============================================================
-    # SIDE-BY-SIDE LAYOUT
+    # 🎨 TWO-COLUMN LAYOUT
     # ============================================================
 
-    col_itin, col_map = st.columns([1.2, 1])  # 55% / 45%
+    col_itin, col_map = st.columns([1.15, 1])
 
-    # ------------------------------------------------------------
-    # LEFT COLUMN – ITINERARY
-    # ------------------------------------------------------------
+    # ---------- LEFT COLUMN: ITINERARY ----------
     with col_itin:
         st.markdown("### 📅 Itinerary")
 
@@ -117,14 +165,11 @@ elif st.session_state["page"] == "output":
                 })
 
         if rows:
-            df = pd.DataFrame(rows)
-            st.dataframe(df, use_container_width=True, height=430)
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, height=420)
         else:
-            st.info("No activities found in this plan.")
+            st.info("No activities found in your itinerary.")
 
-    # ------------------------------------------------------------
-    # RIGHT COLUMN – MAP
-    # ------------------------------------------------------------
+    # ---------- RIGHT COLUMN: MAP ----------
     with col_map:
         st.markdown("### 🌍 Map Overview")
 
@@ -159,9 +204,9 @@ elif st.session_state["page"] == "output":
                 "ScatterplotLayer",
                 data=pts,
                 get_position='[lon, lat]',
-                get_fill_color='[30, 60, 200, 180]',
-                get_radius=100,
-                pickable=True,
+                get_fill_color='[0, 102, 204, 180]',  # Napoli blue tone
+                get_radius=120,
+                pickable=True
             )
 
             view_state = pdk.ViewState(
@@ -175,7 +220,7 @@ elif st.session_state["page"] == "output":
                 pdk.Deck(
                     layers=[scatter],
                     initial_view_state=view_state,
-                    tooltip={"text": "{name}\nType: {type}"},
+                    tooltip={"text": "{name}\nType: {type}"}
                 )
             )
 
@@ -189,8 +234,8 @@ elif st.session_state["page"] == "output":
     st.markdown("### ✏️ Refine Your Plan")
 
     refine_text = st.text_area(
-        "Tell Big Ears how to tweak your trip:",
-        placeholder="e.g., Make it cheaper and add more hiking...",
+        "Tell Big Ears how to tweak your trip",
+        placeholder="e.g., Make it cheaper and add more hiking..."
     )
 
     if st.button("🪄 Refine Plan"):
@@ -198,13 +243,13 @@ elif st.session_state["page"] == "output":
             with st.spinner("Refining your itinerary..."):
                 st.session_state["state"] = refine_plan(st.session_state["state"], refine_text)
                 st.session_state["plan"] = st.session_state["state"].plan
-            st.success("Plan updated!")
+            st.success("✅ Plan refined! Scroll up to see the update.")
             st.rerun()
         else:
-            st.warning("Please enter something to refine.")
+            st.warning("Please enter a refinement request.")
 
     # ============================================================
-    # BACK BUTTON
+    # ⬅️ BACK BUTTON
     # ============================================================
 
     st.markdown("---")
