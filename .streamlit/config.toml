@@ -1,0 +1,9 @@
+[theme]
+base="light"
+
+# Napoli Color Palette
+primaryColor="#007FFF"              # Napoli Blue
+backgroundColor="#E6F4FF"           # Light Azzurro background
+secondaryBackgroundColor="#CFE8FF"  # Sidebar/background elements
+textColor="#0A1A44"                 # Deep Navy Blue (readable)
+font="sans serif"
